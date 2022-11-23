@@ -1,0 +1,165 @@
+#!/usr/bin/env bash 
+# cumulus-ztp: provisions switches in a data center.  
+# Copyright (C) 2021 Justin Herron contact@net-dev.net
+# 
+# This script is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This script is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# Source env files 
+
+. /etc/os-release
+
+# Vars start
+VERSION="v1"
+DFMT="$(date "+%T")"
+SSHDIR="/root/.ssh"
+AT="<GITLAB-ACCESS-TOKEN>"
+LOG="/var/log/provision.log"
+EMAIL="<EMAIL@ADDRESS.COM>"
+
+trap error ERR
+exec >> $LOG 2>&1
+
+# Gitlab Endpoints
+# cl-license doesn't support https 
+LICENSE="http://<GITLAB-HOSTNAME>/api/v4/projects/<PROGJECT-ID>/repository/files/PATH%2FTO%2Flicense.txt/raw?private_token=$AT"
+KEYS="http://<GITLAB-HOSTNAME>/api/v4/projects/<PROGJECT-ID>/repository/files/PATH%2FTO%2Fauthorized_keys/raw?private_token=$AT"
+IMAGE="http://<GITLAB-HOSTNAME>/api/v4/projects/<PROGJECT-ID>/repository/files/PATH%2FTO%2Fimage.bin/raw?private_token=$AT"
+HSFLOWD="http://<GITLAB-HOSTNAME>/v4/projects/<PROGJECT-ID>/repository/files/PATH%2FTO%2Fhsflowd.conf/raw?private_token=$AT"
+
+# Vars end
+# functions start
+
+do_init(){
+printf "Setting base configuration for dns to work"
+systemctl enable --now netd
+net add time zone America/New_York
+net add dns nameserver ipv4 <NAME-SERVER>
+net add dns nameserver ipv4 <NAME-SERVER>
+net add dns nameserver ipv4 <NAME-SERVER> vrf mgmt
+net commit
+}
+
+error(){
+  echo "Script failed while running the command $BASH_COMMAND at line $BASH_LINENO" | mutt -s "host $(hostname)@$(ip -br addr show dev eth0  | awk '{print $3}')" $EMAIL
+  printf "Script failed while running the command $BASH_COMMAND at line $BASH_LINENO" >&2
+  exit 1
+}
+check_rel(){
+     printf "Checking release before installing license\n"
+     if [ $VERSION_ID != '4.1.1' ]; then
+        printf "Error release is not up to standard updating to 4.1.1\n"
+        /usr/cumulus/bin/onie-install -a -i $IMAGE
+        in=$?
+        if [ $in -eq 0 ]; then
+           printf "Rebooting!!!!!!!\n"
+           init 6
+        else
+           exit 1
+        fi
+     else
+        printf "Nevermind all good installing license\n"
+        return 0
+     fi
+}
+install_license(){
+     printf "$DFMT INFO: Installing License...\n"
+     /usr/cumulus/bin/cl-license -i $LICENSE
+     r=$?
+     if [ $r -eq 0 ]; then
+         printf "$DFMT INFO: License Installed, restarting switchd\n"
+         systemctl restart switchd
+     else
+         printf "$DFMT ERROR: License not installed. Return code was: $r\n"
+         /usr/cumulus/bin/cl-license
+         exit 1
+     fi
+}
+authorized_keys(){
+     if [ ! -d "$SSHDIR" ]; then
+             printf "Creating ssh directory in $SSHDIR\n"
+             mkdir $SSHDIR;
+             printf "Adding NetOps keys\n"
+             curl -o $SSHDIR/authorized_keys $KEYS >&2
+     else
+             printf "Adding NetOps keys\n"
+             curl -o $SSHDIR/authorized_keys $KEYS >&2
+     fi
+}
+base(){
+ #variables
+        local LEAP="https://hpiers.obspm.fr/iers/bul/bulc/ntp/leap-seconds.list"
+ # arrays;
+        local dservices=("ntp" "ssh" "nginx" "netqd")
+        # packages: 
+        #    Editors: vim,nano,vi
+        #    mail:
+        #         - libsasl2-modules is for authentication.
+        #         - mut email client
+        local packages=("vim" "nano" "vi" "mutt" "libsasl2-modules")
+
+
+# setup time 
+        curl -o /usr/share/zoneinfo/leap-seconds.list $LEAP
+        echo "interface ignore wildcard" >> /etc/ntp.conf
+        timedatectl set-timezone America/New_York
+        ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
+# setup repos
+        echo "deb http://deb.debian.org/debian <releases> <suite>" >> /etc/apt/sources.list
+        echo "deb http://deb.debian.org/debian <releases> <suite>" >> /etc/apt/sources.list
+
+# update package cache
+        apt-get update -y
+        for p in ${packages[@]}; do
+            apt-get install -y ${p}
+        done
+
+# set up mutt
+cat <<EOF > ~/.muttrc
+set from = "email@address.com"
+set realname = "Jimmy cracked corn and I don't care"
+set smtp_url = "smtp://email@address.com@mail.server.com:587/"
+set smtp_pass = "<PASSWORD>"
+set imap_user = "EMAIL@ADDRRESS.COM"
+set imap_pass = "<PASSWORD>"
+EOF
+
+# disable services we do not want running running in default vrf
+        printf "Setting up vrf related services....."
+        for d in ${dservices[@]}; do
+            systemctl disable --now ${d}
+        done
+# Enable mgmt vrf services
+        for v in ${dservices[0]} ${dservices[1]}; do
+            systemctl enable --now ${v}@mgmt
+        done
+
+# Send email advising done
+
+echo "Base configuration for $(hostname -s) is complete" | mutt -s "ALERT!! $(hostname)@$(ip -br addr show dev eth0 | awk '{print $3}')" $EMAIL
+
+}
+# Functions end
+
+# populate the array then off she goess 
+do_stuff+=("do_init")
+do_stuff+=("check_rel")
+do_stuff+=("authorized_keys")
+do_stuff+=("install_license")
+do_stuff+=("base")
+
+	for i in ${do_stuff[@]}; do
+        	printf " + Starting -> ${i}\n"
+ 			${i}
+	done
+
+# CUMULUS-AUTOPROVISIONING
+exit 0
+

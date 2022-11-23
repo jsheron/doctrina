@@ -1,0 +1,17 @@
+Let us now consider how we can characterize the progress of a process. 
+(You may think about this question in a very concrete manner: suppose 
+that a process, considered as a time succession of actions, is stopped 
+after an arbitrary action, what data do we have to fix in order that 
+we can redo the process until the very same point?) If the program text 
+is a pure concatenation of, say, assignment statements (for the purpose 
+of this discussion regarded as the descriptions of single actions) it 
+is sufficient to point in the program text to a point between two 
+successive action descriptions. 
+
+(In the absence of go to statements I can permit myself the syntactic 
+ambiguity in the last three words of the previous sentence: if we parse 
+them as "successive (action descriptions)" we mean successive in text space;
+ if we parse as "(successive action) descriptions" we mean successive in time.) 
+Let us call such a pointer to a suitable place in the text a "textual index."
+
+
